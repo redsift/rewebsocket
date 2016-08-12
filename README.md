@@ -1,1 +1,1 @@
-WebSocket client that automatically reconnects (uses [Gorilla WebSocket](https://github.com/gorilla/websocket)).
+WebSocket client that automatically reconnects, based on [Gorilla WebSocket](https://github.com/gorilla/websocket)).
