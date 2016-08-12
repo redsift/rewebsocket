@@ -18,10 +18,10 @@ func TestWebSocketReconnect(t *testing.T) {
 	readCh := make(chan []byte)
 	var reconnectCount int
 	c := WebSocketTextClient{
-		OnReadMessage: func(msg []byte) {
+		OnReadMessage: func(cancel chan struct{}, msg []byte) {
 			readCh <- msg
 		},
-		OnReopen: func() (string, http.Header, error) {
+		OnReopen: func(cancel chan struct{}) (string, http.Header, error) {
 			reconnectCount++
 			return wsURL, nil, nil
 		},

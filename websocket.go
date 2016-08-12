@@ -33,17 +33,26 @@ type WebSocketTextClient struct {
 	// be processed concurrently unless the implementing function runs its logic
 	// in a different goroutine. If this function blocks it will block the read
 	// loop (which allows for flow control) and delay closing until it is
-	// unblocked. If not set, messages will still be read but ignored.
-	OnReadMessage func(msg []byte)
+	// unblocked. If not set, messages will still be read but ignored. The given
+	// cancel channel will be closed when the WebSocketTextClient is closed,
+	// allowing the user to cancel long running operations.
+	OnReadMessage func(cancel chan struct{}, msg []byte)
 
 	// OnReopen will be called before reconnecting to obtain new parameters to
 	// Open(). The operation will be retried using the Retry function. If not
 	// set, the original values will be used. If this function blocks it will
-	// halt reconnect and close progress.
-	OnReopen func() (url string, header http.Header, err error)
+	// halt reconnect and close progress. The given cancel channel will be closed
+	// when the WebSocketTextClient is closed, allowing the user to cancel long
+	// running operations.
+	OnReopen func(cancel chan struct{}) (url string, header http.Header, err error)
 
 	// debug logs
 	logln func(...interface{})
+
+	// OnError is called when there is a non-fatal error (typically failing to
+	// read a message) This function will run in its own goroutine. If not set
+	// the event will be lost.
+	OnError func(error)
 
 	// OnFatal is called when there is a fatal error (we can't reconnect after
 	// retrying using the retry function).  When there is a fatal error the
@@ -57,7 +66,7 @@ type WebSocketTextClient struct {
 	// reconnecting. When the function returns an error, OnFatal will be called
 	// and the client will be closed automatically. If not set reconnect
 	// operations will only be attempted once. If this function blocks it will
-	// halt reconnect progress.
+	// halt reconnect progress. It will be called from a single goroutine.
 	Retry func(chan struct{}, func() error) error
 
 	// these two are set by Open() and then guarded by the reconnect loop
@@ -100,7 +109,11 @@ func (c *WebSocketTextClient) Open(url string, header http.Header) error {
 	}
 
 	if c.OnReadMessage == nil {
-		c.OnReadMessage = func([]byte) {}
+		c.OnReadMessage = func(chan struct{}, []byte) {}
+	}
+
+	if c.OnError == nil {
+		c.OnError = func(error) {}
 	}
 
 	c.url = url
@@ -188,7 +201,7 @@ func (c *WebSocketTextClient) reconnectLoop() {
 
 			if c.OnReopen != nil {
 				err := c.Retry(c.close, func() error {
-					url, header, err := c.OnReopen()
+					url, header, err := c.OnReopen(c.close)
 					if err != nil {
 						return err
 					}
@@ -256,8 +269,7 @@ func (c *WebSocketTextClient) readLoop() {
 			msgType, msg, err := c.conn.ReadMessage()
 			c.connMutex.RUnlock()
 			if err != nil {
-				// TODO(robbiev): Maybe add some sort of callback for these errors so
-				// people can log them?
+				go c.OnError(err)
 				c.tryReconnect()
 				return
 			}
@@ -273,7 +285,7 @@ func (c *WebSocketTextClient) readLoop() {
 			// which is easy to forget. Of course this costs us an extra allocation,
 			// if this ever becomes a problem we can add an additional callback that
 			// does take a reader and if set, only call that one.
-			c.OnReadMessage(msg)
+			c.OnReadMessage(c.close, msg)
 		}
 	}
 }
