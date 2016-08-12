@@ -55,10 +55,10 @@ type WebSocketTextClient struct {
 	OnError func(error)
 
 	// OnFatal is called when there is a fatal error (we can't reconnect after
-	// retrying using the retry function).  When there is a fatal error the
-	// client will be closed automatically. If not set the client will still
-	// automatically close but the event will be lost. This function will run in
-	// its own goroutine.
+	// retrying using the retry function). When there is a fatal error the client
+	// will be closed automatically, right before calling OnFatal. If not set the
+	// client will still automatically close but the event will be lost. This
+	// function will run in its own goroutine.
 	OnFatal func(error)
 
 	// Retry is a function that retries the given function until it gives up and
@@ -75,6 +75,7 @@ type WebSocketTextClient struct {
 
 	// never reassigned after Open
 	close       chan struct{}
+	closeWG     sync.WaitGroup
 	reconnectCh chan bool
 
 	// guarded by connMutex
@@ -141,8 +142,13 @@ func (c *WebSocketTextClient) Open(url string, header http.Header) error {
 	return nil
 }
 
-// Close sends a close frame and then closes the underlying connection.
+// Close sends a close frame and then closes the underlying connection. It will
+// block until a full shutdown has been achieved.
 func (c *WebSocketTextClient) Close() error {
+	// This needs to happen before taking the locks because the loops use them too and
+	// they will potentially be deadlocked if we wait while holding the locks.
+	defer c.closeWG.Wait()
+
 	c.stateMutex.Lock()
 	defer c.stateMutex.Unlock()
 
@@ -192,6 +198,8 @@ func (c *WebSocketTextClient) tryReconnect() {
 
 // should run in its own goroutine
 func (c *WebSocketTextClient) reconnectLoop() {
+	c.closeWG.Add(1)
+	defer c.closeWG.Done()
 	for {
 		select {
 		case <-c.close:
@@ -211,9 +219,13 @@ func (c *WebSocketTextClient) reconnectLoop() {
 				})
 
 				if err != nil {
-					go c.Close()
 					if c.OnFatal != nil {
-						go c.OnFatal(err)
+						go func() {
+							c.Close()
+							c.OnFatal(err)
+						}()
+					} else {
+						go c.Close()
 					}
 					goto Exit
 				}
@@ -233,9 +245,13 @@ func (c *WebSocketTextClient) reconnectLoop() {
 
 			// TODO(robbiev): same code as above - deduplicate
 			if err != nil {
-				go c.Close()
 				if c.OnFatal != nil {
-					go c.OnFatal(err)
+					go func() {
+						c.Close()
+						c.OnFatal(err)
+					}()
+				} else {
+					go c.Close()
 				}
 				goto Exit
 			}
@@ -260,6 +276,8 @@ Exit:
 }
 
 func (c *WebSocketTextClient) readLoop() {
+	c.closeWG.Add(1)
+	defer c.closeWG.Done()
 	for {
 		select {
 		case <-c.close:
@@ -288,6 +306,7 @@ func (c *WebSocketTextClient) readLoop() {
 			c.OnReadMessage(c.close, msg)
 		}
 	}
+
 }
 
 func connect(url string, header http.Header) (*websocket.Conn, error) {
