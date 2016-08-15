@@ -174,8 +174,9 @@ func (c *WebSocketTextClient) Close() error {
 // WriteTextMessage writes a text message to the WebSocket
 func (c *WebSocketTextClient) WriteTextMessage(msg []byte) error {
 	c.connMutex.RLock()
-	defer c.connMutex.RUnlock()
-	if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+	conn := c.conn
+	c.connMutex.RUnlock()
+	if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 		c.tryReconnect()
 		return err
 	}
@@ -284,8 +285,9 @@ func (c *WebSocketTextClient) readLoop() {
 			return
 		default:
 			c.connMutex.RLock()
-			msgType, msg, err := c.conn.ReadMessage()
+			conn := c.conn
 			c.connMutex.RUnlock()
+			msgType, msg, err := conn.ReadMessage()
 			if err != nil {
 				go c.OnError(err)
 				c.tryReconnect()
