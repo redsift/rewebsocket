@@ -10,24 +10,38 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func connect(url string, header http.Header) (*websocket.Conn, error) {
+	conn, _, err := websocket.DefaultDialer.Dial(url, header)
+	if err != nil {
+		return nil, err
+	}
+
+	return conn, err
+}
+
 func TestWebSocketReconnect(t *testing.T) {
 	srv := httptest.NewServer(echoer(t))
 	defer srv.Close()
 	wsURL := strings.Replace(srv.URL, "http", "ws", 1)
 
 	readCh := make(chan []byte)
-	var reconnectCount int
+	var connectCount int
 	c := WebSocketTextClient{
 		OnReadMessage: func(cancel chan struct{}, msg []byte) {
 			readCh <- msg
 		},
-		OnReopen: func(cancel chan struct{}) (string, http.Header, error) {
-			reconnectCount++
-			return wsURL, nil, nil
-		},
 		logln: t.Log,
 	}
-	err := c.Open(wsURL, nil)
+	err := c.Open(func(cancel chan struct{}) (*websocket.Conn, error) {
+		connectCount++
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		return conn, err
+
+	})
 	if err != nil {
 		t.Fatal("client dial:", err)
 	}
@@ -56,8 +70,8 @@ End:
 	if !receivedEcho {
 		t.Fatal("did not receive echo from server")
 	}
-	if reconnectCount < 3 {
-		t.Fatal("did not reconnect enough times")
+	if connectCount != 4 {
+		t.Fatal("unexpected amount of connects", connectCount)
 	}
 }
 

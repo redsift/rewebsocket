@@ -4,7 +4,6 @@ package rewebsocket
 import (
 	"fmt"
 	"io"
-	"net/http"
 	"sync"
 	"time"
 
@@ -24,6 +23,13 @@ const (
 	stateClosed
 )
 
+// Dialer will be called to establish the WebSocket connection. The operation
+// might will be retried using the Retry function. If this function blocks it
+// will halt (re)connect and close progress. The given cancel channel will be
+// closed when the WebSocketTextClient is closed, allowing the user to cancel
+// long running operations.
+type Dialer func(cancel chan struct{}) (*websocket.Conn, error)
+
 // WebSocketTextClient is a WebSocket text client that automatically reconnects
 // to the remote service. All fields that you decide to set must be set before
 // calling Open and are not safe to be modified after. When a connection
@@ -38,14 +44,6 @@ type WebSocketTextClient struct {
 	// cancel channel will be closed when the WebSocketTextClient is closed,
 	// allowing the user to cancel long running operations.
 	OnReadMessage func(cancel chan struct{}, msg []byte)
-
-	// OnReopen will be called before reconnecting to obtain new parameters to
-	// Open(). The operation will be retried using the Retry function. If not
-	// set, the original values will be used. If this function blocks it will
-	// halt reconnect and close progress. The given cancel channel will be closed
-	// when the WebSocketTextClient is closed, allowing the user to cancel long
-	// running operations.
-	OnReopen func(cancel chan struct{}) (url string, header http.Header, err error)
 
 	// debug logs
 	logln func(...interface{})
@@ -70,9 +68,14 @@ type WebSocketTextClient struct {
 	// halt reconnect progress. It will be called from a single goroutine.
 	Retry func(chan struct{}, func() error) error
 
-	// these two are set by Open() and then guarded by the reconnect loop
-	url    string
-	header http.Header
+	// dialer is set by Open() and then guarded by the reconnect loop
+
+	// Dialer will be called to establish the WebSocket connection. The operation
+	// might will be retried using the Retry function. If this function blocks it
+	// will halt (re)connect and close progress. The given cancel channel will be
+	// closed when the WebSocketTextClient is closed, allowing the user to cancel
+	// long running operations.
+	dialer Dialer
 
 	// never reassigned after Open
 	close       chan struct{}
@@ -89,7 +92,7 @@ type WebSocketTextClient struct {
 }
 
 // Open opens the connection to the given URL and starts receiving messages
-func (c *WebSocketTextClient) Open(url string, header http.Header) error {
+func (c *WebSocketTextClient) Open(dialer Dialer) error {
 	c.stateMutex.Lock()
 	defer c.stateMutex.Unlock()
 
@@ -118,12 +121,11 @@ func (c *WebSocketTextClient) Open(url string, header http.Header) error {
 		c.OnError = func(error) {}
 	}
 
-	c.url = url
-	c.header = header
+	c.dialer = dialer
 	c.close = make(chan struct{})
 
 	{
-		conn, err := connect(url, header)
+		conn, err := dialer(c.close)
 		if err != nil {
 			return err
 		}
@@ -209,30 +211,6 @@ func (c *WebSocketTextClient) reconnectLoop() {
 		case _ = <-c.reconnectCh:
 			c.logln("reconnect")
 
-			if c.OnReopen != nil {
-				err := c.Retry(c.close, func() error {
-					url, header, err := c.OnReopen(c.close)
-					if err != nil {
-						return err
-					}
-					c.url = url
-					c.header = header
-					return nil
-				})
-
-				if err != nil {
-					if c.OnFatal != nil {
-						go func() {
-							c.Close()
-							c.OnFatal(err)
-						}()
-					} else {
-						go c.Close()
-					}
-					goto Exit
-				}
-			}
-
 			c.connMutex.RLock()
 			_ = c.conn.Close()
 			c.connMutex.RUnlock()
@@ -241,11 +219,10 @@ func (c *WebSocketTextClient) reconnectLoop() {
 			var err error
 
 			err = c.Retry(c.close, func() error {
-				conn, err = connect(c.url, c.header)
+				conn, err = c.dialer(c.close)
 				return err
 			})
 
-			// TODO(robbiev): same code as above - deduplicate
 			if err != nil {
 				if c.OnFatal != nil {
 					go func() {
@@ -310,15 +287,6 @@ func (c *WebSocketTextClient) readLoop() {
 		}
 	}
 
-}
-
-func connect(url string, header http.Header) (*websocket.Conn, error) {
-	conn, _, err := websocket.DefaultDialer.Dial(url, header)
-	if err != nil {
-		return nil, err
-	}
-
-	return conn, err
 }
 
 // need to take stateMutex when accessing this function
