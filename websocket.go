@@ -1,3 +1,4 @@
+// Package rewebsocket adds autoreconnect to Gorilla WebSocket.
 package rewebsocket
 
 import (
