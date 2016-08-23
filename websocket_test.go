@@ -26,7 +26,7 @@ func TestWebSocketReconnect(t *testing.T) {
 
 	readCh := make(chan []byte)
 	var connectCount int
-	c := WebSocketTextClient{
+	c := TextClient{
 		OnReadMessage: func(cancel chan struct{}, msg []byte) {
 			readCh <- msg
 		},

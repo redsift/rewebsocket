@@ -14,7 +14,7 @@ type state int
 
 // ensure we implement io.Closer
 var (
-	_ io.Closer = &WebSocketTextClient{}
+	_ io.Closer = &TextClient{}
 )
 
 const (
@@ -26,22 +26,22 @@ const (
 // Dialer will be called to establish the WebSocket connection. The operation
 // might will be retried using the Retry function. If this function blocks it
 // will halt (re)connect and close progress. The given cancel channel will be
-// closed when the WebSocketTextClient is closed, allowing the user to cancel
+// closed when the TextClient is closed, allowing the user to cancel
 // long running operations.
 type Dialer func(cancel chan struct{}) (*websocket.Conn, error)
 
-// WebSocketTextClient is a WebSocket text client that automatically reconnects
+// TextClient is a WebSocket text client that automatically reconnects
 // to the remote service. All fields that you decide to set must be set before
 // calling Open and are not safe to be modified after. When a connection
 // problem occurs, writes will fail and some incoming messages may be lost. The
 // client can only be opened and closed once.
-type WebSocketTextClient struct {
+type TextClient struct {
 	// OnReadMessage will be called for each incoming message. Messages will not
 	// be processed concurrently unless the implementing function runs its logic
 	// in a different goroutine. If this function blocks it will block the read
 	// loop (which allows for flow control) and delay closing until it is
 	// unblocked. If not set, messages will still be read but ignored. The given
-	// cancel channel will be closed when the WebSocketTextClient is closed,
+	// cancel channel will be closed when the TextClient is closed,
 	// allowing the user to cancel long running operations.
 	OnReadMessage func(cancel chan struct{}, msg []byte)
 
@@ -73,7 +73,7 @@ type WebSocketTextClient struct {
 	// Dialer will be called to establish the WebSocket connection. The operation
 	// might will be retried using the Retry function. If this function blocks it
 	// will halt (re)connect and close progress. The given cancel channel will be
-	// closed when the WebSocketTextClient is closed, allowing the user to cancel
+	// closed when the TextClient is closed, allowing the user to cancel
 	// long running operations.
 	dialer Dialer
 
@@ -92,7 +92,7 @@ type WebSocketTextClient struct {
 }
 
 // Open opens the connection to the given URL and starts receiving messages
-func (c *WebSocketTextClient) Open(dialer Dialer) error {
+func (c *TextClient) Open(dialer Dialer) error {
 	c.stateMutex.Lock()
 	defer c.stateMutex.Unlock()
 
@@ -147,7 +147,7 @@ func (c *WebSocketTextClient) Open(dialer Dialer) error {
 
 // Close sends a close frame and then closes the underlying connection. It will
 // block until a full shutdown has been achieved.
-func (c *WebSocketTextClient) Close() error {
+func (c *TextClient) Close() error {
 	// This needs to happen before taking the locks because the loops use them too and
 	// they will potentially be deadlocked if we wait while holding the locks.
 	defer c.closeWG.Wait()
@@ -175,7 +175,7 @@ func (c *WebSocketTextClient) Close() error {
 }
 
 // WriteTextMessage writes a text message to the WebSocket
-func (c *WebSocketTextClient) WriteTextMessage(msg []byte) error {
+func (c *TextClient) WriteTextMessage(msg []byte) error {
 	c.connMutex.RLock()
 	conn := c.conn
 	c.connMutex.RUnlock()
@@ -187,7 +187,7 @@ func (c *WebSocketTextClient) WriteTextMessage(msg []byte) error {
 }
 
 // trigger a reconnect unless one is already in progress
-func (c *WebSocketTextClient) tryReconnect() {
+func (c *TextClient) tryReconnect() {
 	c.stateMutex.Lock()
 	defer c.stateMutex.Unlock()
 
@@ -201,7 +201,7 @@ func (c *WebSocketTextClient) tryReconnect() {
 }
 
 // should run in its own goroutine
-func (c *WebSocketTextClient) reconnectLoop() {
+func (c *TextClient) reconnectLoop() {
 	c.closeWG.Add(1)
 	defer c.closeWG.Done()
 	for {
@@ -254,7 +254,7 @@ Exit:
 	c.logln("exit reconnect")
 }
 
-func (c *WebSocketTextClient) readLoop() {
+func (c *TextClient) readLoop() {
 	c.closeWG.Add(1)
 	defer c.closeWG.Done()
 	for {
@@ -290,7 +290,7 @@ func (c *WebSocketTextClient) readLoop() {
 }
 
 // need to take stateMutex when accessing this function
-func (c *WebSocketTextClient) checkOpen() error {
+func (c *TextClient) checkOpen() error {
 	switch c.state {
 	case stateClosed:
 		return fmt.Errorf("already closed")
